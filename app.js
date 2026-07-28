@@ -646,9 +646,12 @@ function openCropper(dataUrl, name) {
       drag: null
     };
     image.onload = () => {
-      layoutCropImage();
-      resetCropSelection();
       openModal('cropModal');
+      // 弹窗隐藏时容器宽高为 0；必须显示后再计算图片与选区尺寸。
+      requestAnimationFrame(() => {
+        layoutCropImage();
+        resetCropSelection();
+      });
     };
     image.src = dataUrl;
   });
