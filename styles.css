@@ -403,6 +403,53 @@ body {
 .ocr-images img { max-width: 180px; max-height: 120px; border-radius: var(--radius-sm); border: 1px solid var(--border); }
 .hint { color: var(--text-3); font-size: 12px; margin-top: 8px; }
 
+/* ============== 拍照框选 ============== */
+.crop-modal-card { max-width: 860px !important; }
+.crop-subtitle { color: var(--text-3); font-size: 12px; margin-top: 2px; }
+.crop-modal-body { padding: 12px; background: #0f172a; }
+.crop-stage {
+  position: relative; width: 100%; height: min(62dvh, 620px);
+  overflow: hidden; border-radius: 10px; background: #020617;
+  touch-action: none; user-select: none; -webkit-user-select: none;
+}
+.crop-stage > img {
+  position: absolute; display: block; max-width: none; max-height: none;
+  pointer-events: none;
+}
+.crop-shade { position: absolute; background: rgba(2, 6, 23, .62); pointer-events: none; }
+.crop-box {
+  position: absolute; border: 2px solid #60a5fa;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.7), 0 0 18px rgba(37,99,235,.35);
+  cursor: move; touch-action: none;
+}
+.crop-box::before, .crop-box::after {
+  content: ""; position: absolute; pointer-events: none; opacity: .45;
+}
+.crop-box::before { left: 33.33%; top: 0; bottom: 0; width: 33.33%; border-left: 1px solid #fff; border-right: 1px solid #fff; }
+.crop-box::after { top: 33.33%; left: 0; right: 0; height: 33.33%; border-top: 1px solid #fff; border-bottom: 1px solid #fff; }
+.crop-label {
+  position: absolute; top: -28px; left: -2px; padding: 3px 8px;
+  border-radius: 5px; background: #2563eb; color: #fff; font-size: 12px;
+}
+.crop-handle {
+  position: absolute; width: 28px; height: 28px; border: 3px solid #fff;
+  background: #2563eb; border-radius: 50%; box-shadow: 0 2px 8px rgba(0,0,0,.35);
+}
+.crop-handle.nw { left: -14px; top: -14px; cursor: nwse-resize; }
+.crop-handle.ne { right: -14px; top: -14px; cursor: nesw-resize; }
+.crop-handle.sw { left: -14px; bottom: -14px; cursor: nesw-resize; }
+.crop-handle.se { right: -14px; bottom: -14px; cursor: nwse-resize; }
+.crop-tips { color: #cbd5e1; font-size: 12px; margin-top: 10px; line-height: 1.5; }
+.crop-tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+.crop-tools .btn { color: #e2e8f0; border-color: #475569; }
+.crop-enhance { color: #e2e8f0; font-size: 13px; display: flex; align-items: center; gap: 6px; margin-left: auto; }
+@media (max-width: 600px) {
+  .crop-modal-body { padding: 8px; }
+  .crop-stage { height: 56dvh; border-radius: 8px; }
+  .crop-modal-card .modal-foot .btn { flex: 1; padding-left: 8px; padding-right: 8px; }
+  .crop-enhance { width: 100%; margin-left: 0; }
+}
+
 /* ============== Review (SM-2) ============== */
 .review-box {
   background: var(--surface-2);

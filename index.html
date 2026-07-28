@@ -336,6 +336,47 @@
   </div>
 
   <!-- 模态框：OCR 二次确认（解题） -->
+  <div class="modal" id="cropModal" hidden>
+    <div class="modal-mask"></div>
+    <div class="modal-card wide crop-modal-card">
+      <div class="modal-head">
+        <div>
+          <h3>框选要识别的题目</h3>
+          <div class="crop-subtitle">只保留题干、条件和选项，排除答案解析与其他题目</div>
+        </div>
+        <button class="icon-btn" id="cropCancelTop">✕</button>
+      </div>
+      <div class="modal-body crop-modal-body">
+        <div class="crop-stage" id="cropStage">
+          <img id="cropImage" alt="待框选的题目照片" />
+          <div class="crop-shade crop-shade-top"></div>
+          <div class="crop-shade crop-shade-right"></div>
+          <div class="crop-shade crop-shade-bottom"></div>
+          <div class="crop-shade crop-shade-left"></div>
+          <div class="crop-box" id="cropBox" aria-label="题目框选区域">
+            <span class="crop-label">题目区域</span>
+            <span class="crop-handle nw" data-handle="nw"></span>
+            <span class="crop-handle ne" data-handle="ne"></span>
+            <span class="crop-handle sw" data-handle="sw"></span>
+            <span class="crop-handle se" data-handle="se"></span>
+          </div>
+        </div>
+        <div class="crop-tips">拖动框内可移动；拖动四角可调整范围。建议完整包含根号、分数线和所有选项。</div>
+        <div class="crop-tools">
+          <button class="btn ghost small" id="cropRotate">↻ 旋转 90°</button>
+          <button class="btn ghost small" id="cropReset">重置选区</button>
+          <label class="crop-enhance"><input type="checkbox" id="cropEnhance" checked /> 自动增强文字</label>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost" id="cropUseFull">使用整张</button>
+        <button class="btn ghost" id="cropCancel">取消</button>
+        <button class="btn primary" id="cropConfirm">确认框选并识别</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 模态框：OCR 二次确认（解题） -->
   <div class="modal" id="ocrSolveModal" hidden>
     <div class="modal-mask"></div>
     <div class="modal-card wide">

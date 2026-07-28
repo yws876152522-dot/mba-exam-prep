@@ -84,6 +84,8 @@ let state = {
   currentPracticeQ: null,
 };
 
+let cropState = null;
+
 function loadState() {
   try { state.mistakes = JSON.parse(localStorage.getItem(STORAGE_KEYS.mistakes) || '[]'); } catch { state.mistakes = []; }
   try { state.practice = JSON.parse(localStorage.getItem(STORAGE_KEYS.practice) || '{"count":0,"log":[]}'); } catch { state.practice = { count: 0, log: [] }; }
@@ -197,8 +199,24 @@ function switchTab(tab) {
 // ============== OCR 调用 ==============
 async function callOCR(images) {
   // images: [{ dataUrl, name }]
-  if (state.settings.mode === 'mock' || state.settings.ocrProvider === 'mock') {
+  if (state.settings.mode === 'mock') {
     return mockOCR(images);
+  }
+  // OCR 与解题模型解耦：DeepSeek 负责解题，已保存的 GPT 视觉预设负责图片转写。
+  if (state.settings.ocrProvider === 'mock') {
+    try {
+      const result = await callVisionOCR(images);
+      if (result) return result;
+    } catch (e) {
+      console.error(e);
+      toast(e.message || '视觉识别失败', 3000);
+    }
+    return {
+      text: '',
+      confidence: 0,
+      needsManual: true,
+      message: '未找到可用的视觉识别配置。DeepSeek Chat 只接收文字，请切换一次 GPT 预设并保存 Key，或手动输入题目。'
+    };
   }
   // 真实 Provider 留扩展点
   if (state.settings.ocrProvider === 'baidu') {
@@ -208,6 +226,56 @@ async function callOCR(images) {
     return await callTencentOCR(images);
   }
   return mockOCR(images);
+}
+
+function getVisionProfile() {
+  const active = state.settings;
+  if (active.mode === 'api' && /openai\.com/i.test(active.gptEndpoint || '') && active.gptKey) return active;
+  const profile = state.profiles.find(p =>
+    p.settings?.mode === 'api' &&
+    /openai\.com/i.test(p.settings.gptEndpoint || '') &&
+    p.settings.gptKey
+  );
+  return profile?.settings || null;
+}
+
+async function callVisionOCR(images) {
+  const vision = getVisionProfile();
+  if (!vision) return null;
+  const content = [{
+    type: 'text',
+    text: `你是MBA考试题目转写器。请逐字识别图片中的题目，只输出JSON：
+{"text":"完整题目","confidence":0到1之间的小数,"uncertain":["不确定的片段"]}
+要求：
+1. 保留题号、题干、所有条件与A-E选项；
+2. 数学公式用清晰的纯文本/LaTeX，根号必须保留完整作用范围；
+3. 不要识别图片之外的内容，不要解题，不要补写；
+4. 忽略答案、解析、页眉页脚、手写划线和水印；
+5. 如果字符不确定，在uncertain中列出，不要凭空猜测。`
+  }];
+  images.forEach(i => content.push({ type: 'image_url', image_url: { url: i.dataUrl, detail: 'high' } }));
+  const resp = await fetch(vision.gptEndpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${vision.gptKey}` },
+    body: JSON.stringify({
+      model: vision.gptModel || 'gpt-4o',
+      messages: [
+        { role: 'system', content: '你只负责忠实转写考试题目，输出合法JSON。' },
+        { role: 'user', content }
+      ],
+      temperature: 0,
+      response_format: { type: 'json_object' }
+    })
+  });
+  if (!resp.ok) throw new Error(`视觉识别请求失败（${resp.status}）`);
+  const data = await resp.json();
+  const parsed = safeParse(data?.choices?.[0]?.message?.content || '{}');
+  return {
+    text: parsed.text || '',
+    confidence: Number(parsed.confidence) || 0,
+    uncertain: Array.isArray(parsed.uncertain) ? parsed.uncertain : [],
+    provider: vision.gptModel || 'GPT视觉'
+  };
 }
 function mockOCR(images) {
   // 演示用：根据上传与否返回一段典型题目
@@ -487,6 +555,161 @@ function mixQuestion(subject, difficulty) {
   return mockQuestion(subj, difficulty);
 }
 
+// ============== 图片框选与增强 ==============
+function openCropper(dataUrl, name) {
+  return new Promise(resolve => {
+    const image = $('#cropImage');
+    cropState = {
+      dataUrl, name, resolve, imageRect: null,
+      box: { x: 0, y: 0, w: 0, h: 0 },
+      drag: null
+    };
+    image.onload = () => {
+      layoutCropImage();
+      resetCropSelection();
+      openModal('cropModal');
+    };
+    image.src = dataUrl;
+  });
+}
+
+function layoutCropImage() {
+  if (!cropState) return;
+  const stage = $('#cropStage');
+  const image = $('#cropImage');
+  const sw = stage.clientWidth, sh = stage.clientHeight;
+  const scale = Math.min(sw / image.naturalWidth, sh / image.naturalHeight);
+  const w = image.naturalWidth * scale, h = image.naturalHeight * scale;
+  const x = (sw - w) / 2, y = (sh - h) / 2;
+  Object.assign(image.style, { left: x + 'px', top: y + 'px', width: w + 'px', height: h + 'px' });
+  cropState.imageRect = { x, y, w, h, scale };
+}
+
+function resetCropSelection() {
+  if (!cropState?.imageRect) return;
+  const r = cropState.imageRect;
+  cropState.box = {
+    x: r.x + r.w * .05,
+    y: r.y + r.h * .18,
+    w: r.w * .90,
+    h: r.h * .64
+  };
+  renderCropBox();
+}
+
+function renderCropBox() {
+  if (!cropState) return;
+  const b = cropState.box, r = cropState.imageRect;
+  const box = $('#cropBox');
+  Object.assign(box.style, { left: b.x + 'px', top: b.y + 'px', width: b.w + 'px', height: b.h + 'px' });
+  Object.assign($('.crop-shade-top').style, { left:r.x+'px', top:r.y+'px', width:r.w+'px', height:Math.max(0,b.y-r.y)+'px' });
+  Object.assign($('.crop-shade-bottom').style, { left:r.x+'px', top:(b.y+b.h)+'px', width:r.w+'px', height:Math.max(0,r.y+r.h-b.y-b.h)+'px' });
+  Object.assign($('.crop-shade-left').style, { left:r.x+'px', top:b.y+'px', width:Math.max(0,b.x-r.x)+'px', height:b.h+'px' });
+  Object.assign($('.crop-shade-right').style, { left:(b.x+b.w)+'px', top:b.y+'px', width:Math.max(0,r.x+r.w-b.x-b.w)+'px', height:b.h+'px' });
+}
+
+function setupCropper() {
+  const stage = $('#cropStage');
+  const boxEl = $('#cropBox');
+  boxEl.addEventListener('pointerdown', e => {
+    if (!cropState) return;
+    e.preventDefault();
+    boxEl.setPointerCapture?.(e.pointerId);
+    cropState.drag = {
+      startX: e.clientX, startY: e.clientY,
+      start: { ...cropState.box },
+      handle: e.target.dataset.handle || 'move'
+    };
+  });
+  boxEl.addEventListener('pointermove', e => {
+    const d = cropState?.drag;
+    if (!d) return;
+    const dx = e.clientX - d.startX, dy = e.clientY - d.startY;
+    const r = cropState.imageRect, min = 48;
+    let { x, y, w, h } = d.start;
+    if (d.handle === 'move') {
+      x = Math.max(r.x, Math.min(r.x + r.w - w, x + dx));
+      y = Math.max(r.y, Math.min(r.y + r.h - h, y + dy));
+    } else {
+      if (d.handle.includes('e')) w = Math.max(min, Math.min(r.x + r.w - x, w + dx));
+      if (d.handle.includes('s')) h = Math.max(min, Math.min(r.y + r.h - y, h + dy));
+      if (d.handle.includes('w')) {
+        const nx = Math.max(r.x, Math.min(x + w - min, x + dx));
+        w += x - nx; x = nx;
+      }
+      if (d.handle.includes('n')) {
+        const ny = Math.max(r.y, Math.min(y + h - min, y + dy));
+        h += y - ny; y = ny;
+      }
+    }
+    cropState.box = { x, y, w, h };
+    renderCropBox();
+  });
+  const endDrag = () => { if (cropState) cropState.drag = null; };
+  boxEl.addEventListener('pointerup', endDrag);
+  boxEl.addEventListener('pointercancel', endDrag);
+
+  $('#cropReset').onclick = resetCropSelection;
+  $('#cropRotate').onclick = rotateCropImage;
+  $('#cropConfirm').onclick = () => finishCrop(false);
+  $('#cropUseFull').onclick = () => finishCrop(true);
+  $('#cropCancel').onclick = cancelCrop;
+  $('#cropCancelTop').onclick = cancelCrop;
+  window.addEventListener('resize', () => {
+    if (!$('#cropModal').hidden && cropState) { layoutCropImage(); resetCropSelection(); }
+  });
+}
+
+function rotateCropImage() {
+  if (!cropState) return;
+  const img = $('#cropImage');
+  const canvas = document.createElement('canvas');
+  canvas.width = img.naturalHeight; canvas.height = img.naturalWidth;
+  const ctx = canvas.getContext('2d');
+  ctx.translate(canvas.width, 0); ctx.rotate(Math.PI / 2);
+  ctx.drawImage(img, 0, 0);
+  cropState.dataUrl = canvas.toDataURL('image/jpeg', .94);
+  img.src = cropState.dataUrl;
+}
+
+function finishCrop(useFull) {
+  if (!cropState) return;
+  const cs = cropState, img = $('#cropImage'), r = cs.imageRect;
+  const source = useFull ? { x:0, y:0, w:img.naturalWidth, h:img.naturalHeight } : {
+    x: Math.max(0, Math.round((cs.box.x-r.x) / r.scale)),
+    y: Math.max(0, Math.round((cs.box.y-r.y) / r.scale)),
+    w: Math.min(img.naturalWidth, Math.round(cs.box.w / r.scale)),
+    h: Math.min(img.naturalHeight, Math.round(cs.box.h / r.scale))
+  };
+  const maxSide = 2200;
+  const scale = Math.min(maxSide/source.w, maxSide/source.h, 1);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(source.w*scale));
+  canvas.height = Math.max(1, Math.round(source.h*scale));
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, source.x, source.y, source.w, source.h, 0, 0, canvas.width, canvas.height);
+  if ($('#cropEnhance').checked) enhanceCanvas(ctx, canvas.width, canvas.height);
+  const item = { dataUrl: canvas.toDataURL('image/jpeg', .92), name: cs.name, cropped: !useFull };
+  cropState = null; closeModal('cropModal'); cs.resolve(item);
+}
+
+function enhanceCanvas(ctx, w, h) {
+  const image = ctx.getImageData(0, 0, w, h);
+  const d = image.data;
+  for (let i=0; i<d.length; i+=4) {
+    const gray = .299*d[i] + .587*d[i+1] + .114*d[i+2];
+    const v = Math.max(0, Math.min(255, (gray - 128) * 1.28 + 142));
+    d[i] = d[i+1] = d[i+2] = v;
+  }
+  ctx.putImageData(image, 0, 0);
+}
+
+function cancelCrop() {
+  if (!cropState) return;
+  const cs = cropState; cropState = null; closeModal('cropModal'); cs.resolve(null);
+}
+
 // ============== 解题模块 ==============
 function setupSolve() {
   // 上传
@@ -526,15 +749,19 @@ function setupSolve() {
   });
 }
 
-function handleSolveFiles(files, isCamera) {
+async function handleSolveFiles(files, isCamera) {
   const arr = Array.from(files || []);
   if (!arr.length) return;
-  arr.forEach(f => readImage(f, dataUrl => {
-    state.currentSolveImages.push({ dataUrl, name: f.name });
+  let added = false;
+  for (const f of arr) {
+    const dataUrl = await readImageAsync(f);
+    const item = await openCropper(dataUrl, f.name);
+    if (!item) continue;
+    state.currentSolveImages.push(item);
+    added = true;
     renderSolvePreviews();
-    // 拍照/上传后立即触发OCR二次确认
-    openOCRSolveConfirm();
-  }));
+  }
+  if (added) openOCRSolveConfirm();
 }
 
 function renderSolvePreviews() {
@@ -552,7 +779,8 @@ function openOCRSolveConfirm() {
   openModal('ocrSolveModal');
   callOCR(state.currentSolveImages).then(r => {
     $('#ocrSolveText').value = r.text || '';
-    $('#ocrSolveHint').textContent = r.mock ? '（演示模式：返回模拟识别结果）' : `识别完成，置信度 ${(r.confidence||0).toFixed(2)}`;
+    const uncertain = r.uncertain?.length ? `；请重点核对：${r.uncertain.join('、')}` : '';
+    $('#ocrSolveHint').textContent = r.message || (r.mock ? '（演示模式：返回模拟识别结果）' : `${r.provider || 'OCR'} 识别完成，置信度 ${(r.confidence||0).toFixed(2)}${uncertain}`);
   });
   $('#ocrSolveConfirm').onclick = () => {
     const txt = $('#ocrSolveText').value.trim();
@@ -760,14 +988,19 @@ function setupMistakes() {
   });
 }
 
-function handleMistakeFiles(files) {
+async function handleMistakeFiles(files) {
   const arr = Array.from(files || []);
   if (!arr.length) return;
-  arr.forEach(f => readImage(f, dataUrl => {
-    state.currentMistakeImages.push({ dataUrl, name: f.name });
+  let added = false;
+  for (const f of arr) {
+    const dataUrl = await readImageAsync(f);
+    const item = await openCropper(dataUrl, f.name);
+    if (!item) continue;
+    state.currentMistakeImages.push(item);
+    added = true;
     renderMistakePreviews();
-    openOCRMistakeConfirm();
-  }));
+  }
+  if (added) openOCRMistakeConfirm();
 }
 
 function renderMistakePreviews() {
@@ -784,7 +1017,8 @@ function openOCRMistakeConfirm() {
   openModal('ocrMistakeModal');
   callOCR(state.currentMistakeImages).then(r => {
     $('#ocrMQuestion').value = r.text || '';
-    $('#ocrMHint').textContent = r.mock ? '（演示模式：返回模拟识别结果）' : `识别完成，置信度 ${(r.confidence||0).toFixed(2)}`;
+    const uncertain = r.uncertain?.length ? `；请重点核对：${r.uncertain.join('、')}` : '';
+    $('#ocrMHint').textContent = r.message || (r.mock ? '（演示模式：返回模拟识别结果）' : `${r.provider || 'OCR'} 识别完成，置信度 ${(r.confidence||0).toFixed(2)}${uncertain}`);
   });
 }
 
@@ -1216,7 +1450,8 @@ function readImage(file, cb) {
     // 压缩图片：防止 localStorage 溢出（5-10MB 限制）
     const img = new Image();
     img.onload = () => {
-      const maxW = 1200, maxH = 1600;
+      // OCR 输入优先保留小字和公式边界；真正入库前会在框选阶段再次压缩。
+      const maxW = 2400, maxH = 3200;
       let w = img.width, h = img.height;
       const ratio = Math.min(maxW / w, maxH / h, 1);
       w = Math.round(w * ratio);
@@ -1226,15 +1461,18 @@ function readImage(file, cb) {
       canvas.height = h;
       const ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0, w, h);
-      // JPEG 压缩，质量 0.75（照片）；PNG 透明图保留 PNG
+      // JPEG 使用较高质量，避免根号、分数线和上下标被压糊。
       const isPng = file.type === 'image/png';
-      const dataUrl = isPng ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', 0.75);
+      const dataUrl = isPng ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', 0.92);
       cb(dataUrl);
     };
     img.onerror = () => cb(e.target.result); // 压缩失败则用原图
     img.src = e.target.result;
   };
   r.readAsDataURL(file);
+}
+function readImageAsync(file) {
+  return new Promise(resolve => readImage(file, resolve));
 }
 function renderPreviews(sel, arr, onClear, onRemove) {
   const wrap = $(sel);
@@ -1349,6 +1587,7 @@ function init() {
   saveMistakes();
 
   setupSolve();
+  setupCropper();
   setupPractice();
   setupMistakes();
   setupSettings();
@@ -1376,6 +1615,7 @@ function init() {
     const c = e.target.closest('[data-close]');
     if (c) closeModal(c.dataset.close);
     if (e.target.classList?.contains('modal-mask')) {
+      if (e.target.parentElement.id === 'cropModal') { cancelCrop(); return; }
       e.target.parentElement.hidden = true;
       document.body.style.overflow = '';
     }
