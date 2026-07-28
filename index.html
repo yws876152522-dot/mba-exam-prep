@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#2563eb" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="考神" />
+  <meta name="format-detection" content="telephone=no" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E📚%3C/text%3E%3C/svg%3E" />
+  <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%232563eb'/%3E%3Ctext x='50' y='50' font-size='60' text-anchor='middle' dominant-baseline='central'%3E📚%3C/text%3E%3C/svg%3E" />
+  <title>考神 · MBA备考助手</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- 顶部栏 -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">📚</div>
+      <div class="brand-text">
+        <div class="brand-title">考神</div>
+        <div class="brand-sub">MBA备考助手</div>
+      </div>
+    </div>
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-tab="solve">🧠 解题</button>
+      <button class="tab" data-tab="practice">📝 出题</button>
+      <button class="tab" data-tab="mistakes">📒 错题集</button>
+      <button class="tab" data-tab="stats">📊 统计</button>
+    </nav>
+    <button class="api-switch-btn demo" id="apiSwitchBtn" title="一键切换 API">🎯 演示</button>
+    <button class="icon-btn" id="settingsBtn" title="设置">⚙️</button>
+  </header>
+
+  <!-- API 快切面板 -->
+  <div class="api-switch-panel" id="apiSwitchPanel" hidden></div>
+
+  <main class="container">
+
+    <!-- 解题模块 -->
+    <section class="view active" id="view-solve">
+      <div class="hero">
+        <h1>拍照即解题</h1>
+        <p>上传题目图片 → 识别 → 二次确认 → 拿到思路和最优解</p>
+      </div>
+
+      <div class="card upload-card">
+        <div class="upload-zone" id="solveUpload">
+          <div class="upload-icon">📷</div>
+          <div class="upload-title">拍照 / 上传题目图片</div>
+          <div class="upload-hint">支持 JPG / PNG · 多张更佳</div>
+          <div class="upload-actions">
+            <label class="btn primary">
+              <input type="file" accept="image/*" capture="environment" hidden id="solveCamera" />
+              拍照
+            </label>
+            <label class="btn ghost">
+              <input type="file" accept="image/*" hidden id="solveFile" multiple />
+              从相册
+            </label>
+          </div>
+        </div>
+        <div class="preview-row" id="solvePreviews"></div>
+      </div>
+
+      <div class="card">
+        <div class="field">
+          <label>科目（用于让模型更对路）</label>
+          <select id="solveSubject">
+            <option value="综合-数学">综合 · 数学</option>
+            <option value="综合-逻辑">综合 · 逻辑</option>
+            <option value="综合-写作">综合 · 写作</option>
+            <option value="综合-语文">综合 · 语文</option>
+            <option value="英语二">英语二</option>
+            <option value="其他">其他</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>题目文本（OCR识别后可在下方二次确认）</label>
+          <textarea id="solveText" placeholder="OCR识别结果会出现在这里，也可以直接粘贴题目..." rows="6"></textarea>
+        </div>
+        <div class="row">
+          <button class="btn primary" id="solveBtn">🧠 解答（思路 + 最优解）</button>
+          <button class="btn ghost" id="solveAddMistakeBtn" disabled>➕ 加入错题集</button>
+        </div>
+      </div>
+
+      <div class="card" id="solveResult" hidden>
+        <div class="result-head">
+          <h2>解答</h2>
+          <span class="badge" id="solveModelBadge">模型：gpt-5.5</span>
+        </div>
+        <div class="result-block" id="solveApproach"></div>
+        <div class="result-block" id="solveFinal"></div>
+        <div class="row">
+          <button class="btn ghost" id="solveCopyBtn">复制结果</button>
+          <button class="btn ghost" id="solveAgainBtn">再来一次</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 出题模块 -->
+    <section class="view" id="view-practice">
+      <div class="hero">
+        <h1>出题练习</h1>
+        <p>近年来MBA科目题库 + 错题集混合出题，按难度梯度练习</p>
+      </div>
+
+      <div class="card">
+        <div class="grid-3">
+          <div class="field">
+            <label>科目</label>
+            <select id="pSubject">
+              <option value="综合-数学">综合 · 数学</option>
+              <option value="综合-逻辑">综合 · 逻辑</option>
+              <option value="综合-写作">综合 · 写作</option>
+              <option value="综合-语文">综合 · 语文</option>
+              <option value="英语二">英语二</option>
+              <option value="随机">随机混合</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>难度</label>
+            <select id="pDifficulty">
+              <option value="easy">基础</option>
+              <option value="medium" selected>中等</option>
+              <option value="hard">拔高</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>题源</label>
+            <select id="pSource">
+              <option value="bank">近年来MBA科目题库</option>
+              <option value="mistakes">我的错题集</option>
+              <option value="mix">混合（题库 + 错题）</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <button class="btn primary" id="pGenerateBtn">🎲 生成题目</button>
+          <button class="btn ghost" id="pRevealBtn" disabled>👁 显示答案</button>
+          <button class="btn ghost" id="pAddMistakeBtn" disabled>➕ 加入错题集</button>
+        </div>
+      </div>
+
+      <div class="card" id="pQuestionCard" hidden>
+        <div class="q-head">
+          <span class="badge" id="pQSubject"></span>
+          <span class="badge" id="pQDifficulty"></span>
+          <span class="badge" id="pQSource"></span>
+        </div>
+        <div class="q-stem" id="pQStem"></div>
+        <div class="q-options" id="pQOptions"></div>
+        <div class="q-answer" id="pQAnswer" hidden></div>
+        <div class="q-explain" id="pQExplain" hidden></div>
+      </div>
+    </section>
+
+    <!-- 错题集模块 -->
+    <section class="view" id="view-mistakes">
+      <div class="hero">
+        <h1>错题集</h1>
+        <p>拍照入册 · 二次确认 · 按科目整理 · SM-2 间隔复习</p>
+        <div class="row" style="margin-top:12px">
+          <button class="btn primary" id="reviewStartBtn">🔁 开始复习（到期错题）</button>
+        </div>
+      </div>
+
+      <div class="card upload-card">
+        <div class="upload-zone" id="mUpload">
+          <div class="upload-icon">📷</div>
+          <div class="upload-title">拍照 / 上传错题图片</div>
+          <div class="upload-hint">必须二次确认才会入册</div>
+          <div class="upload-actions">
+            <label class="btn primary">
+              <input type="file" accept="image/*" capture="environment" hidden id="mCamera" />
+              拍照
+            </label>
+            <label class="btn ghost">
+              <input type="file" accept="image/*" hidden id="mFile" multiple />
+              从相册
+            </label>
+          </div>
+        </div>
+        <div class="preview-row" id="mPreviews"></div>
+      </div>
+
+      <div class="card">
+        <div class="row between">
+          <div class="filters">
+            <select id="mFilterSubject">
+              <option value="all">全部科目</option>
+              <option value="综合-数学">综合 · 数学</option>
+              <option value="综合-逻辑">综合 · 逻辑</option>
+              <option value="综合-写作">综合 · 写作</option>
+              <option value="综合-语文">综合 · 语文</option>
+              <option value="英语二">英语二</option>
+            </select>
+            <select id="mFilterReason">
+              <option value="all">全部错因</option>
+              <option value="知识点盲区">知识点盲区</option>
+              <option value="审题不清">审题不清</option>
+              <option value="计算失误">计算失误</option>
+              <option value="方法不对">方法不对</option>
+              <option value="其他">其他</option>
+            </select>
+            <input type="search" id="mSearch" placeholder="搜索错题内容..." />
+          </div>
+          <div class="row">
+            <button class="btn ghost" id="mExportBtn">导出</button>
+            <button class="btn danger" id="mClearBtn">清空</button>
+          </div>
+        </div>
+        <div class="mistake-list" id="mList"></div>
+      </div>
+    </section>
+
+    <!-- 统计模块 -->
+    <section class="view" id="view-stats">
+      <div class="hero">
+        <h1>数据面板</h1>
+        <p>错题分布 · 练习量 · 复习提醒</p>
+      </div>
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-num" id="sTotal">0</div>
+          <div class="stat-label">错题总数</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-num" id="sToday">0</div>
+          <div class="stat-label">今日新增</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-num" id="sSubj">0</div>
+          <div class="stat-label">覆盖科目数</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-num" id="sPractice">0</div>
+          <div class="stat-label">已练习</div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>各科错题分布</h3>
+        <div class="bars" id="sBars"></div>
+      </div>
+      <div class="card">
+        <h3>待复习（SM-2 到期）</h3>
+        <div class="due-list" id="sDue"></div>
+      </div>
+      <div class="card">
+        <h3>📚 历年真题下载（MBA 联考）</h3>
+        <div class="link-list">
+          <a class="link-item" href="https://www.educity.cn/rk/5349405.html" target="_blank" rel="noopener">
+            <div class="li-emoji">📄</div>
+            <div>
+              <div class="li-title">希赛网 · 2017-2025 各科真题</div>
+              <div class="li-sub">综合能力 / 英语二，含答案解析</div>
+            </div>
+          </a>
+          <a class="link-item" href="https://mba.upc.edu.cn/2024/0723/c19311a258464/page.htm" target="_blank" rel="noopener">
+            <div class="li-emoji">📋</div>
+            <div>
+              <div class="li-title">中国石油大学 MBA · 2011-2024 真题解析</div>
+              <div class="li-sub">综合能力 + 英语二，PDF 下载</div>
+            </div>
+          </a>
+          <a class="link-item" href="https://t.niceloo.com/MZVS9U8" target="_blank" rel="noopener">
+            <div class="li-emoji">🗂️</div>
+            <div>
+              <div class="li-title">考研管综真题资料包</div>
+              <div class="li-sub">2016-2025 管综真题及答案 PDF</div>
+            </div>
+          </a>
+          <a class="link-item" href="https://m.chinakaoyan.com/info/article/id/527307.shtml" target="_blank" rel="noopener">
+            <div class="li-emoji">📰</div>
+            <div>
+              <div class="li-title">中国考研网 · 2024 管综真题完整版</div>
+              <div class="li-sub">逻辑推理题完整在线版</div>
+            </div>
+          </a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- 模态框：复习模式（SM-2） -->
+  <div class="modal" id="reviewModal" hidden>
+    <div class="modal-mask"></div>
+    <div class="modal-card wide">
+      <div class="modal-head">
+        <h3>🔁 间隔复习 <span class="badge" id="reviewProgress">0 / 0</span></h3>
+        <button class="icon-btn" data-close="reviewModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="review-box">
+          <div class="review-meta">
+            <span class="badge primary" id="reviewSubject"></span>
+            <span class="badge warn" id="reviewReason"></span>
+            <span class="badge" id="reviewMeta"></span>
+          </div>
+          <div class="review-q" id="reviewQ"></div>
+          <div class="q-answer" id="reviewAnswer" hidden></div>
+          <div class="q-explain" id="reviewApproach" hidden></div>
+          <div class="row" style="margin-top:12px">
+            <button class="btn primary" id="reviewRevealBtn">👁 显示答案</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot" id="reviewScores" style="flex-direction:column;align-items:stretch">
+        <div style="font-size:13px;color:var(--text-2);margin-bottom:6px">回忆质量（决定下次复习间隔）</div>
+        <div class="score-grid">
+          <button class="score-btn s0" data-q="0"><span class="sn">0</span><span class="sl">完全不会</span></button>
+          <button class="score-btn s1" data-q="1"><span class="sn">1</span><span class="sl">毫无印象</span></button>
+          <button class="score-btn s2" data-q="2"><span class="sn">2</span><span class="sl">想不起来</span></button>
+          <button class="score-btn s3" data-q="3"><span class="sn">3</span><span class="sl">勉强记起</span></button>
+          <button class="score-btn s4" data-q="4"><span class="sn">4</span><span class="sl">略有迟疑</span></button>
+          <button class="score-btn s5" data-q="5"><span class="sn">5</span><span class="sl">完美记住</span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 模态框：通用 -->
+  <div class="modal" id="modal" hidden>
+    <div class="modal-mask"></div>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3 id="mTitle">提示</h3>
+        <button class="icon-btn" id="mClose">✕</button>
+      </div>
+      <div class="modal-body" id="mBody"></div>
+      <div class="modal-foot" id="mFoot"></div>
+    </div>
+  </div>
+
+  <!-- 模态框：OCR 二次确认（解题） -->
+  <div class="modal" id="ocrSolveModal" hidden>
+    <div class="modal-mask"></div>
+    <div class="modal-card wide">
+      <div class="modal-head">
+        <h3>请确认识别出的题目</h3>
+        <button class="icon-btn" data-close="ocrSolveModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="ocr-images" id="ocrSolveImages"></div>
+        <div class="field">
+          <label>识别结果（可手动修改）</label>
+          <textarea id="ocrSolveText" rows="8"></textarea>
+        </div>
+        <div class="hint" id="ocrSolveHint"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost" data-close="ocrSolveModal">取消</button>
+        <button class="btn primary" id="ocrSolveConfirm">确认无误</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 模态框：OCR 二次确认（错题） -->
+  <div class="modal" id="ocrMistakeModal" hidden>
+    <div class="modal-mask"></div>
+    <div class="modal-card wide">
+      <div class="modal-head">
+        <h3>请确认错题入册内容</h3>
+        <button class="icon-btn" data-close="ocrMistakeModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="ocr-images" id="ocrMistakeImages"></div>
+        <div class="grid-2">
+          <div class="field">
+            <label>科目</label>
+            <select id="ocrMSubject">
+              <option value="综合-数学">综合 · 数学</option>
+              <option value="综合-逻辑">综合 · 逻辑</option>
+              <option value="综合-写作">综合 · 写作</option>
+              <option value="综合-语文">综合 · 语文</option>
+              <option value="英语二">英语二</option>
+              <option value="其他">其他</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>错因</label>
+            <select id="ocrMReason">
+              <option value="知识点盲区">知识点盲区</option>
+              <option value="审题不清">审题不清</option>
+              <option value="计算失误">计算失误</option>
+              <option value="方法不对">方法不对</option>
+              <option value="其他">其他</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label>题目（可编辑）</label>
+          <textarea id="ocrMQuestion" rows="5"></textarea>
+        </div>
+        <div class="field">
+          <label>正确答案</label>
+          <textarea id="ocrMAnswer" rows="3" placeholder="例如：C / 1.23 / 该命题为真..."></textarea>
+        </div>
+        <div class="field">
+          <label>你的错答 / 错答标记</label>
+          <textarea id="ocrMWrong" rows="2" placeholder="例如：选了 A（实际是 C）"></textarea>
+        </div>
+        <div class="field">
+          <label>解题思路</label>
+          <textarea id="ocrMApproach" rows="4" placeholder="可手写，可让模型补全"></textarea>
+          <button class="btn ghost small" id="ocrMAutoApproach" style="margin-top:6px">✨ 让模型补全思路</button>
+        </div>
+        <div class="hint" id="ocrMHint"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost" data-close="ocrMistakeModal">取消</button>
+        <button class="btn primary" id="ocrMConfirm">确认入册</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 模态框：错题详情 -->
+  <div class="modal" id="mistakeDetailModal" hidden>
+    <div class="modal-mask"></div>
+    <div class="modal-card wide">
+      <div class="modal-head">
+        <h3>错题详情</h3>
+        <button class="icon-btn" data-close="mistakeDetailModal">✕</button>
+      </div>
+      <div class="modal-body" id="mdBody"></div>
+      <div class="modal-foot">
+        <button class="btn ghost" data-close="mistakeDetailModal">关闭</button>
+        <button class="btn primary" id="mdMarkReviewed">标记已复习</button>
+        <button class="btn danger" id="mdDelete">删除</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 模态框：设置 -->
+  <div class="modal" id="settingsModal" hidden>
+    <div class="modal-mask"></div>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3>设置</h3>
+        <button class="icon-btn" data-close="settingsModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <label>模式</label>
+          <select id="setMode">
+            <option value="mock">演示模式（内置题库与模拟识别，无外部调用）</option>
+            <option value="api">API 模式（调用真实 OCR + GPT）</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>OCR Provider</label>
+          <select id="setOcr">
+            <option value="mock">Mock（演示）</option>
+            <option value="baidu">百度 OCR</option>
+            <option value="tencent">腾讯云 OCR</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>OCR API Key / Secret</label>
+          <input id="setOcrKey" type="text" placeholder="按所选 Provider 填写" />
+        </div>
+        <div class="field">
+          <label>GPT 模型</label>
+          <input id="setGptModel" type="text" placeholder="gpt-4o / deepseek-chat / 自定义模型名" />
+          <div class="hint">常用：gpt-4o · gpt-4o-mini · deepseek-chat · glm-4-flash</div>
+        </div>
+        <div class="field">
+          <label>GPT API Endpoint</label>
+          <input id="setGptEndpoint" type="text" placeholder="例如 https://api.openai.com/v1/chat/completions" />
+        </div>
+        <div class="field">
+          <label>GPT API Key</label>
+          <input id="setGptKey" type="password" placeholder="sk-..." />
+        </div>
+        <div class="field">
+          <label>⚡ API 预设管理</label>
+          <div class="hint" style="margin-bottom:8px">保存多套配置，翻墙时切 GPT、不翻墙切 DeepSeek，一键搞定</div>
+          <div class="profile-list" id="profileList"></div>
+          <button class="btn ghost sm" id="setSaveProfile" style="margin-top:8px">💾 将当前配置存为预设</button>
+        </div>
+        <div class="field">
+          <label>数据管理</label>
+          <div class="row">
+            <button class="btn ghost" id="setImport">导入错题JSON</button>
+            <button class="btn ghost" id="setExport">导出错题JSON</button>
+            <button class="btn danger" id="setWipe">清空全部</button>
+          </div>
+        </div>
+        <div class="hint">提示：演示模式可立即使用；API 模式下数据会发送到你配置的端点，仅本机缓存。</div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost" data-close="settingsModal">取消</button>
+        <button class="btn primary" id="setSave">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
