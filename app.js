@@ -258,8 +258,14 @@ async function getPaddleOcrEngine() {
     await loadScriptOnce('vendor/paddleocr.bundle.js');
     if (!window.PaddleOCR) throw new Error('PaddleOCR 初始化失败');
     const engine = await window.PaddleOCR.create({
-      lang: 'ch',
-      ocrVersion: 'PP-OCRv5',
+      textDetectionModelName: 'PP-OCRv5_mobile_det',
+      textDetectionModelAsset: {
+        url: new URL('vendor/models/PP-OCRv5_mobile_det.tar', window.location.href).href
+      },
+      textRecognitionModelName: 'PP-OCRv5_mobile_rec',
+      textRecognitionModelAsset: {
+        url: new URL('vendor/models/PP-OCRv5_mobile_rec.tar', window.location.href).href
+      },
       ortOptions: {
         backend: 'wasm',
         wasmPaths: new URL('vendor/', window.location.href).href,
