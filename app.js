@@ -206,10 +206,12 @@ async function callOCR(images) {
   }
   // 免费本地 OCR：不上传图片，不需要 Key，适合国内直连。
   if (state.settings.ocrProvider === 'paddle' || state.settings.ocrProvider === 'mock') {
+    let localOcrError = '';
     try {
       return await callPaddleOCR(images);
     } catch (e) {
       console.error(e);
+      localOcrError = String(e?.message || e || '未知错误').replace(/\s+/g, ' ').slice(0, 160);
       toast('本地 OCR 失败，尝试视觉识别备用方案', 3000);
       try {
         const result = await callVisionOCR(images);
@@ -222,7 +224,7 @@ async function callOCR(images) {
       text: '',
       confidence: 0,
       needsManual: true,
-      message: '本地 OCR 加载失败，请检查网络后重试，或手动输入题目。'
+      message: `本地 OCR 加载失败：${localOcrError || '请检查网络后重试'}`
     };
   }
   // 真实 Provider 留扩展点
