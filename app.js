@@ -641,6 +641,9 @@ async function callRealGPT(prompt, opts) {
     toast('请先在设置中配置 GPT Endpoint 与 Key', 2500);
     return mockGPT(prompt, opts);
   }
+  if (opts.images?.length && isKnownTextOnlyImageTarget()) {
+    throw new Error('当前 DeepSeek-chat 是文字模型，不能直接读取图片。请切换到 GPT-4o / GPT-4.1 / GPT-5 等视觉模型，或把题目文字补充到文本框后再解题。');
+  }
   const headers = {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${gptKey}`,
@@ -688,6 +691,12 @@ function buildUserMessageContent(prompt, images=[]) {
       image_url: { url: image.dataUrl }
     }))
   ];
+}
+
+function isKnownTextOnlyImageTarget() {
+  const endpoint = (state.settings.gptEndpoint || '').toLowerCase();
+  const model = (state.settings.gptModel || '').toLowerCase();
+  return endpoint.includes('api.deepseek.com') && /deepseek-(chat|reasoner)/.test(model);
 }
 
 // ============== 模拟题库 ==============
@@ -1015,8 +1024,8 @@ function cancelCrop() {
 // ============== 解题模块 ==============
 function setupSolve() {
   // 上传
-  $('#solveCamera').addEventListener('change', e => handleSolveFiles(e.target.files, true));
-  $('#solveFile').addEventListener('change', e => handleSolveFiles(e.target.files, false));
+  $('#solveCamera').addEventListener('change', e => { handleSolveFiles(e.target.files, true); e.target.value = ''; });
+  $('#solveFile').addEventListener('change', e => { handleSolveFiles(e.target.files, false); e.target.value = ''; });
   bindDropZone($('#solveUpload'), files => handleSolveFiles(files, false));
 
   // 解答
@@ -1027,6 +1036,7 @@ function setupSolve() {
     if (!hasImages && !text) { toast('请先拍照/上传题目，或输入题目文本'); return; }
     setLoading('#solveBtn', true);
     try {
+      showSolveProgress(hasImages ? '正在让模型读取图片并解题...' : '正在解题...');
       const sys = '你是MBA备考专家。若用户提供图片，请先直接阅读图片中的完整题目、公式、选项和条件，再解题。请用 JSON 输出：{ approach: 思路, final: 最优解 }。思路要列出关键步骤和易错点。';
       const prompt = `科目：${subject}\n${text ? `题目补充文本：\n${text}` : '题目在图片中，请先完整识别图片里的题干、公式、选项和条件。'}\n\n请给出：1）思路拆解；2）最优解与最终答案。`;
       const r = await callGPT(prompt, { system: sys, kind: 'solve', images: state.currentSolveImages });
@@ -1044,6 +1054,7 @@ function setupSolve() {
       $('#solveAgainBtn').onclick = () => $('#solveBtn').click();
     } catch (err) {
       console.error(err);
+      showSolveError(err.message || '解答失败');
       toast('解答失败：' + err.message);
     } finally {
       setLoading('#solveBtn', false);
@@ -1063,7 +1074,29 @@ async function handleSolveFiles(files, isCamera) {
     added = true;
     renderSolvePreviews();
   }
-  if (added) toast('已框选题目图片，可直接点击“解答”让模型读图。', 2600);
+  if (added) {
+    closeModal('ocrSolveModal');
+    switchTab('solve');
+    $('#solveResult').hidden = true;
+    requestAnimationFrame(() => $('#solveBtn')?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+    toast('已框选题目图片，直接点“解答”即可。', 2600);
+  }
+}
+
+function showSolveProgress(message) {
+  $('#solveResult').hidden = false;
+  $('#solveModelBadge').textContent = '模型：' + state.settings.gptModel;
+  $('#solveApproach').innerHTML = `<h4>正在处理</h4>${escapeHtml(message)}`;
+  $('#solveFinal').innerHTML = '';
+  $('#solveAddMistakeBtn').disabled = true;
+}
+
+function showSolveError(message) {
+  $('#solveResult').hidden = false;
+  $('#solveModelBadge').textContent = '模型：' + state.settings.gptModel;
+  $('#solveApproach').innerHTML = `<h4>没有完成解题</h4>${escapeHtml(message)}`;
+  $('#solveFinal').innerHTML = `<div class="hint">如果当前是 DeepSeek-chat，请切换到支持图片的视觉模型，或在题目文本框补充题干后再解题。</div>`;
+  $('#solveAddMistakeBtn').disabled = true;
 }
 
 function renderSolvePreviews() {
