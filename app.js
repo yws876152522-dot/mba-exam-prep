@@ -638,7 +638,7 @@ f(2) = 2^2 - 2·2 + 1
 async function callRealGPT(prompt, opts) {
   const { gptEndpoint, gptKey, gptModel } = state.settings;
   if (!gptEndpoint || !gptKey) {
-    toast('请先在设置中配置 GPT Endpoint 与 Key', 2500);
+    toast('请先在设置中选择模型并填写 API Key', 2500);
     return mockGPT(prompt, opts);
   }
   if (opts.images?.length && isKnownTextOnlyImageTarget()) {
@@ -1584,70 +1584,25 @@ function renderStats() {
 // ============== 设置 ==============
 function setupSettings() {
   $('#settingsBtn').addEventListener('click', () => {
-    const s = state.settings;
-    $('#setMode').value = s.mode;
-    $('#setOcr').value = s.ocrProvider;
-    $('#setOcrKey').value = s.ocrKey || '';
-    $('#setGptModel').value = s.gptModel;
-    $('#setGptEndpoint').value = s.gptEndpoint || '';
-    $('#setGptKey').value = s.gptKey || '';
-    renderProfileList();
-    openModal('settingsModal');
+    openSimpleSettings();
   });
 
-  // 快切按钮（顶栏）
+  // 顶栏模型按钮：直接打开设置，减少配置入口。
   $('#apiSwitchBtn').addEventListener('click', (e) => {
     e.stopPropagation();
-    const panel = $('#apiSwitchPanel');
-    if (panel.hidden) {
-      renderApiSwitchPanel();
-      panel.hidden = false;
-    } else {
-      panel.hidden = true;
-    }
-  });
-  document.addEventListener('click', (e) => {
-    const panel = $('#apiSwitchPanel');
-    const btn = $('#apiSwitchBtn');
-    if (panel && !panel.hidden && !panel.contains(e.target) && !btn.contains(e.target)) {
-      panel.hidden = true;
-    }
+    openSimpleSettings();
   });
 
   $('#setSave').addEventListener('click', () => {
-    state.settings = {
-      mode: $('#setMode').value,
-      ocrProvider: $('#setOcr').value,
-      ocrKey: $('#setOcrKey').value.trim(),
-      gptModel: $('#setGptModel').value,
-      gptEndpoint: $('#setGptEndpoint').value.trim(),
-      gptKey: $('#setGptKey').value.trim(),
-    };
+    const provider = $('#setModelProvider').value;
+    const key = $('#setApiKey').value.trim();
+    state.settings = buildSimpleModelSettings(provider, key);
+    syncSimpleProfileKey(provider, key);
     saveSettings();
+    saveProfiles();
     closeModal('settingsModal');
     toast('设置已保存');
     updateApiSwitchLabel();
-  });
-
-  // 保存当前设置为预设
-  $('#setSaveProfile').addEventListener('click', () => {
-    const name = prompt('给这套配置起个名字：', '自定义');
-    if (!name) return;
-    state.profiles.push({
-      name: name,
-      desc: $('#setGptModel').value + ' · ' + ($('#setMode').value === 'api' ? 'API模式' : '演示'),
-      settings: {
-        mode: $('#setMode').value,
-        ocrProvider: $('#setOcr').value,
-        ocrKey: $('#setOcrKey').value.trim(),
-        gptModel: $('#setGptModel').value,
-        gptEndpoint: $('#setGptEndpoint').value.trim(),
-        gptKey: $('#setGptKey').value.trim(),
-      },
-    });
-    saveProfiles();
-    renderProfileList();
-    toast('预设已保存');
   });
 
   $('#setImport').addEventListener('click', () => {
@@ -1681,6 +1636,50 @@ function setupSettings() {
     loadProfiles();
     renderMistakes(); renderStats();
     toast('已清空');
+  });
+}
+
+function openSimpleSettings() {
+  const provider = getSimpleProviderFromSettings();
+  $('#setModelProvider').value = provider;
+  $('#setApiKey').value = state.settings.mode === 'mock' ? '' : (state.settings.gptKey || '');
+  openModal('settingsModal');
+}
+
+function getSimpleProviderFromSettings() {
+  const s = state.settings;
+  if (s.mode === 'mock') return 'demo';
+  if ((s.gptEndpoint || '').includes('deepseek') || (s.gptModel || '').includes('deepseek')) return 'deepseek';
+  return 'gpt';
+}
+
+function buildSimpleModelSettings(provider, key) {
+  if (provider === 'demo') return { ...defaultSettings };
+  if (provider === 'deepseek') {
+    return {
+      ...defaultSettings,
+      mode: 'api',
+      ocrProvider: 'paddle',
+      gptModel: 'deepseek-chat',
+      gptEndpoint: 'https://api.deepseek.com/v1/chat/completions',
+      gptKey: key,
+    };
+  }
+  return {
+    ...defaultSettings,
+    mode: 'api',
+    ocrProvider: 'paddle',
+    gptModel: 'gpt-4o',
+    gptEndpoint: 'https://api.openai.com/v1/chat/completions',
+    gptKey: key,
+  };
+}
+
+function syncSimpleProfileKey(provider, key) {
+  if (provider === 'demo') return;
+  const matcher = provider === 'deepseek' ? 'deepseek' : 'openai';
+  state.profiles.forEach(p => {
+    if ((p.settings?.gptEndpoint || '').includes(matcher)) p.settings.gptKey = key;
   });
 }
 
