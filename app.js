@@ -287,18 +287,46 @@ async function getPaddleOcrEngine() {
 
 async function callPaddleOCR(images) {
   const engine = await getPaddleOcrEngine();
-  const inputs = await Promise.all(images.map(async image => {
+  const sourceBlobs = await Promise.all(images.map(async image => {
     const response = await fetch(image.dataUrl);
     return await response.blob();
   }));
-  const results = await engine.predict(inputs, {
-    textDetLimitSideLen: 1280,
+  const selectedItems = [];
+  let usedFineMode = false;
+  for (const [sourceIndex, sourceBlob] of sourceBlobs.entries()) {
+    const tiled = await makeOcrTiles(sourceBlob);
+    const inputs = [sourceBlob, ...tiled.map(t => t.blob)];
+    const results = await engine.predict(inputs, {
+    textDetLimitSideLen: 1600,
     textDetLimitType: 'max',
-    textRecScoreThresh: 0.35
-  });
-  const allItems = results.flatMap((result, imageIndex) =>
-    (result.items || []).map(item => ({ ...item, imageIndex }))
-  );
+      textDetThresh: 0.18,
+      textDetBoxThresh: 0.30,
+      textDetUnclipRatio: 1.65,
+      textRecScoreThresh: 0.06
+    });
+    const fullItems = results[0]?.items || [];
+    const fullTextLength = fullItems.reduce((n, item) => n + (item.text?.length || 0), 0);
+    const hasFormulaStem = fullItems.some(item => /[=＝√]/.test(item.text || ''));
+    if (tiled.length) {
+      const tileItems = results.slice(1).flatMap((result, index) =>
+        (result.items || []).map(item => ({
+          ...item,
+          poly: item.poly.map(point => [point[0] + tiled[index].offsetX, point[1]])
+        }))
+      );
+      const mergedRows = mergeOcrTileRows(tileItems, tiled[0].imageHeight);
+      const mergedLength = mergedRows.reduce((n, item) => n + item.text.length, 0);
+      if ((!hasFormulaStem && mergedLength > fullTextLength) || mergedLength > fullTextLength * 1.35) {
+        selectedItems.push(...mergedRows.map(item => ({ ...item, imageIndex: sourceIndex })));
+        usedFineMode = true;
+      } else {
+        selectedItems.push(...fullItems.map(item => ({ ...item, imageIndex: sourceIndex })));
+      }
+    } else {
+      selectedItems.push(...fullItems.map(item => ({ ...item, imageIndex: sourceIndex })));
+    }
+  }
+  const allItems = selectedItems;
   allItems.sort((a, b) => {
     if (a.imageIndex !== b.imageIndex) return a.imageIndex - b.imageIndex;
     const ay = Math.min(...a.poly.map(p => p[1]));
@@ -313,8 +341,72 @@ async function callPaddleOCR(images) {
     text: allItems.map(item => item.text).join('\n'),
     confidence,
     uncertain,
-    provider: '飞桨 PaddleOCR（本地）'
+    provider: usedFineMode ? '飞桨 PaddleOCR（本地·超宽精细识别）' : '飞桨 PaddleOCR（本地）'
   };
+}
+
+async function makeOcrTiles(blob) {
+  const bitmap = await createImageBitmap(blob);
+  const { width, height } = bitmap;
+  if (width / height < 3.2 || width < 1200) {
+    bitmap.close?.();
+    return [];
+  }
+  const count = width / height > 6.5 ? 3 : 2;
+  const overlapRatio = .18;
+  const tileWidth = Math.ceil(width / (count - (count - 1) * overlapRatio));
+  const step = Math.round(tileWidth * (1 - overlapRatio));
+  const tiles = [];
+  for (let i = 0; i < count; i++) {
+    const x = Math.min(i * step, width - tileWidth);
+    const canvas = document.createElement('canvas');
+    canvas.width = tileWidth;
+    canvas.height = height;
+    canvas.getContext('2d').drawImage(bitmap, x, 0, tileWidth, height, 0, 0, tileWidth, height);
+    const tileBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', .96));
+    tiles.push({ blob: tileBlob, offsetX: x, imageHeight: height });
+  }
+  bitmap.close?.();
+  return tiles;
+}
+
+function mergeOcrTileRows(items, imageHeight) {
+  const tolerance = Math.max(18, imageHeight * .075);
+  const rows = [];
+  const normalized = items.map(item => ({
+    ...item,
+    x: Math.min(...item.poly.map(p => p[0])),
+    y: item.poly.reduce((sum, p) => sum + p[1], 0) / item.poly.length
+  })).sort((a,b) => a.y - b.y || a.x - b.x);
+  normalized.forEach(item => {
+    let row = rows.find(r => Math.abs(r.y - item.y) <= tolerance);
+    if (!row) {
+      row = { y: item.y, items: [] };
+      rows.push(row);
+    }
+    row.items.push(item);
+    row.y = row.items.reduce((sum, x) => sum + x.y, 0) / row.items.length;
+  });
+  return rows.sort((a,b) => a.y-b.y).map(row => {
+    row.items.sort((a,b) => a.x-b.x);
+    let text = '';
+    row.items.forEach(item => { text = joinOcrFragments(text, item.text || ''); });
+    const score = row.items.reduce((sum, item) => sum + (Number(item.score) || 0), 0) / row.items.length;
+    const minX = Math.min(...row.items.flatMap(item => item.poly.map(p => p[0])));
+    const maxX = Math.max(...row.items.flatMap(item => item.poly.map(p => p[0])));
+    return { text, score, poly: [[minX,row.y-10],[maxX,row.y-10],[maxX,row.y+10],[minX,row.y+10]] };
+  }).filter(item => item.text.trim());
+}
+
+function joinOcrFragments(left, right) {
+  if (!left) return right;
+  if (!right || left.includes(right)) return left;
+  if (right.includes(left)) return right;
+  const max = Math.min(12, left.length, right.length);
+  for (let size = max; size >= 1; size--) {
+    if (left.slice(-size) === right.slice(0, size)) return left + right.slice(size);
+  }
+  return left + right;
 }
 
 function getVisionProfile() {
@@ -774,13 +866,19 @@ function finishCrop(useFull) {
     h: Math.min(img.naturalHeight, Math.round(cs.box.h / r.scale))
   };
   const maxSide = 2200;
-  const scale = Math.min(maxSide/source.w, maxSide/source.h, 1);
+  // OCR 对长公式中的根号、上下标很依赖像素高度，小图至少放大后再识别。
+  const scale = Math.min(maxSide/source.w, maxSide/source.h, 3);
+  const padding = 28;
   const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(source.w*scale));
-  canvas.height = Math.max(1, Math.round(source.h*scale));
+  const drawWidth = Math.max(1, Math.round(source.w*scale));
+  const drawHeight = Math.max(1, Math.round(source.h*scale));
+  canvas.width = drawWidth + padding * 2;
+  canvas.height = drawHeight + padding * 2;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(img, source.x, source.y, source.w, source.h, 0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, source.x, source.y, source.w, source.h, padding, padding, drawWidth, drawHeight);
   if ($('#cropEnhance').checked) enhanceCanvas(ctx, canvas.width, canvas.height);
   const item = { dataUrl: canvas.toDataURL('image/jpeg', .92), name: cs.name, cropped: !useFull };
   cropState = null; closeModal('cropModal'); cs.resolve(item);
