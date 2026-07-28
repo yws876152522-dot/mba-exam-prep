@@ -87,6 +87,7 @@ let state = {
 let cropState = null;
 let paddleOcrEngine = null;
 let paddleOcrLoading = null;
+let paddleOcrModelMode = null;
 
 function loadState() {
   try { state.mistakes = JSON.parse(localStorage.getItem(STORAGE_KEYS.mistakes) || '[]'); } catch { state.mistakes = []; }
@@ -211,6 +212,7 @@ async function callOCR(images) {
       return await callPaddleOCR(images);
     } catch (e) {
       console.error(e);
+      if (isOcrMemoryError(e)) await resetPaddleOcrEngine();
       localOcrError = String(e?.message || e || '未知错误').replace(/\s+/g, ' ').slice(0, 160);
       toast('本地 OCR 失败，尝试视觉识别备用方案', 3000);
       try {
@@ -224,7 +226,9 @@ async function callOCR(images) {
       text: '',
       confidence: 0,
       needsManual: true,
-      message: `本地 OCR 加载失败：${localOcrError || '请检查网络后重试'}`
+      message: isOcrMemoryError(localOcrError)
+        ? '本地 OCR 内存不足：已切换低内存策略，请重新选择图片或缩小框选区域再试。'
+        : `本地 OCR 加载失败：${localOcrError || '请检查网络后重试'}`
     };
   }
   // 真实 Provider 留扩展点
@@ -259,22 +263,23 @@ async function getPaddleOcrEngine() {
   paddleOcrLoading = (async () => {
     await loadScriptOnce('vendor/paddleocr.bundle.js');
     if (!window.PaddleOCR) throw new Error('PaddleOCR 初始化失败');
+    const model = getPaddleModelConfig();
     const engine = await window.PaddleOCR.create({
-      textDetectionModelName: 'PP-OCRv5_mobile_det',
-      textDetectionModelAsset: {
-        url: new URL('vendor/models/PP-OCRv5_mobile_det.tar', window.location.href).href
-      },
-      textRecognitionModelName: 'PP-OCRv5_mobile_rec',
-      textRecognitionModelAsset: {
-        url: new URL('vendor/models/PP-OCRv5_mobile_rec.tar', window.location.href).href
-      },
+      textDetectionModelName: model.detName,
+      textDetectionModelAsset: { url: model.detUrl },
+      textRecognitionModelName: model.recName,
+      textRecognitionModelAsset: { url: model.recUrl },
+      pipelineBatchSize: 1,
+      textDetectionBatchSize: 1,
+      textRecognitionBatchSize: 1,
       ortOptions: {
         backend: 'wasm',
         wasmPaths: new URL('vendor/', window.location.href).href,
         numThreads: 1,
-        simd: true
+        simd: model.simd
       }
     });
+    paddleOcrModelMode = model.mode;
     paddleOcrEngine = engine;
     return engine;
   })();
@@ -283,6 +288,48 @@ async function getPaddleOcrEngine() {
   } finally {
     paddleOcrLoading = null;
   }
+}
+
+function getPaddleModelConfig() {
+  const lowMemory = isLowMemoryOcrDevice();
+  if (lowMemory) {
+    return {
+      mode: 'tiny',
+      detName: 'PP-OCRv6_tiny_det',
+      recName: 'PP-OCRv6_tiny_rec',
+      detUrl: 'https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar',
+      recUrl: 'https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar',
+      simd: false
+    };
+  }
+  return {
+    mode: 'mobile',
+    detName: 'PP-OCRv5_mobile_det',
+    recName: 'PP-OCRv5_mobile_rec',
+    detUrl: new URL('vendor/models/PP-OCRv5_mobile_det.tar', window.location.href).href,
+    recUrl: new URL('vendor/models/PP-OCRv5_mobile_rec.tar', window.location.href).href,
+    simd: true
+  };
+}
+
+function isLowMemoryOcrDevice() {
+  const ua = navigator.userAgent || '';
+  const touchDevice = navigator.maxTouchPoints > 1;
+  const mobileUA = /iPhone|iPad|iPod|Android|Mobile|MicroMessenger|MQQBrowser/i.test(ua);
+  const memory = Number(navigator.deviceMemory) || 0;
+  return mobileUA || touchDevice || (memory > 0 && memory <= 4);
+}
+
+function isOcrMemoryError(error) {
+  const msg = String(error?.message || error || '');
+  return /out of memory|RangeError|memory access|Array buffer allocation|no available backend/i.test(msg);
+}
+
+async function resetPaddleOcrEngine() {
+  try { await paddleOcrEngine?.dispose?.(); } catch {}
+  paddleOcrEngine = null;
+  paddleOcrLoading = null;
+  paddleOcrModelMode = null;
 }
 
 async function callPaddleOCR(images) {
@@ -295,25 +342,19 @@ async function callPaddleOCR(images) {
   let usedFineMode = false;
   for (const [sourceIndex, sourceBlob] of sourceBlobs.entries()) {
     const tiled = await makeOcrTiles(sourceBlob);
-    const inputs = [sourceBlob, ...tiled.map(t => t.blob)];
-    const results = await engine.predict(inputs, {
-    textDetLimitSideLen: 1600,
-    textDetLimitType: 'max',
-      textDetThresh: 0.18,
-      textDetBoxThresh: 0.30,
-      textDetUnclipRatio: 1.65,
-      textRecScoreThresh: 0.06
-    });
-    const fullItems = results[0]?.items || [];
+    const fullResult = await predictPaddleBlob(engine, sourceBlob);
+    const fullItems = fullResult.items || [];
     const fullTextLength = fullItems.reduce((n, item) => n + (item.text?.length || 0), 0);
     const hasFormulaStem = fullItems.some(item => /[=＝√]/.test(item.text || ''));
     if (tiled.length) {
-      const tileItems = results.slice(1).flatMap((result, index) =>
-        (result.items || []).map(item => ({
+      const tileItems = [];
+      for (const [index, tile] of tiled.entries()) {
+        const result = await predictPaddleBlob(engine, tile.blob);
+        tileItems.push(...(result.items || []).map(item => ({
           ...item,
-          poly: item.poly.map(point => [point[0] + tiled[index].offsetX, point[1]])
-        }))
-      );
+          poly: item.poly.map(point => [point[0] + tile.offsetX, point[1]])
+        })));
+      }
       const mergedRows = mergeOcrTileRows(tileItems, tiled[0].imageHeight);
       const mergedLength = mergedRows.reduce((n, item) => n + item.text.length, 0);
       if ((!hasFormulaStem && mergedLength > fullTextLength) || mergedLength > fullTextLength * 1.35) {
@@ -341,7 +382,45 @@ async function callPaddleOCR(images) {
     text: allItems.map(item => item.text).join('\n'),
     confidence,
     uncertain,
-    provider: usedFineMode ? '飞桨 PaddleOCR（本地·超宽精细识别）' : '飞桨 PaddleOCR（本地）'
+    provider: usedFineMode
+      ? `飞桨 PaddleOCR（本地·${paddleOcrModelMode === 'tiny' ? '低内存' : '超宽精细'}识别）`
+      : `飞桨 PaddleOCR（本地${paddleOcrModelMode === 'tiny' ? '·低内存' : ''}）`
+  };
+}
+
+async function predictPaddleBlob(engine, blob) {
+  const params = getPaddlePredictParams();
+  try {
+    return (await engine.predict(blob, params))[0] || { items: [] };
+  } catch (error) {
+    if (!isOcrMemoryError(error)) throw error;
+    const smaller = await resizeBlobForOcr(blob, 1100);
+    if (smaller === blob) throw error;
+    return (await engine.predict(smaller, {
+      ...params,
+      textDetLimitSideLen: 960
+    }))[0] || { items: [] };
+  }
+}
+
+function getPaddlePredictParams() {
+  if (paddleOcrModelMode === 'tiny') {
+    return {
+      textDetLimitSideLen: 960,
+      textDetLimitType: 'max',
+      textDetThresh: 0.22,
+      textDetBoxThresh: 0.36,
+      textDetUnclipRatio: 1.55,
+      textRecScoreThresh: 0.08
+    };
+  }
+  return {
+    textDetLimitSideLen: 1440,
+    textDetLimitType: 'max',
+    textDetThresh: 0.18,
+    textDetBoxThresh: 0.30,
+    textDetUnclipRatio: 1.65,
+    textRecScoreThresh: 0.06
   };
 }
 
@@ -352,9 +431,11 @@ async function makeOcrTiles(blob) {
     bitmap.close?.();
     return [];
   }
-  const count = width / height > 6.5 ? 3 : 2;
-  const overlapRatio = .18;
-  const tileWidth = Math.ceil(width / (count - (count - 1) * overlapRatio));
+  const lowMemory = paddleOcrModelMode === 'tiny' || isLowMemoryOcrDevice();
+  const maxTileWidth = lowMemory ? 980 : 1280;
+  const count = Math.min(5, Math.max(width / height > 6.5 ? 3 : 2, Math.ceil(width / maxTileWidth)));
+  const overlapRatio = lowMemory ? .22 : .18;
+  const tileWidth = Math.min(maxTileWidth, Math.ceil(width / (count - (count - 1) * overlapRatio)));
   const step = Math.round(tileWidth * (1 - overlapRatio));
   const tiles = [];
   for (let i = 0; i < count; i++) {
@@ -363,11 +444,29 @@ async function makeOcrTiles(blob) {
     canvas.width = tileWidth;
     canvas.height = height;
     canvas.getContext('2d').drawImage(bitmap, x, 0, tileWidth, height, 0, 0, tileWidth, height);
-    const tileBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', .96));
+    const tileBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', .9));
     tiles.push({ blob: tileBlob, offsetX: x, imageHeight: height });
   }
   bitmap.close?.();
   return tiles;
+}
+
+async function resizeBlobForOcr(blob, maxSide) {
+  const bitmap = await createImageBitmap(blob);
+  const ratio = Math.min(maxSide / bitmap.width, maxSide / bitmap.height, 1);
+  if (ratio >= .98) {
+    bitmap.close?.();
+    return blob;
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(bitmap.width * ratio));
+  canvas.height = Math.max(1, Math.round(bitmap.height * ratio));
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close?.();
+  return await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', .88));
 }
 
 function mergeOcrTileRows(items, imageHeight) {
@@ -865,10 +964,10 @@ function finishCrop(useFull) {
     w: Math.min(img.naturalWidth, Math.round(cs.box.w / r.scale)),
     h: Math.min(img.naturalHeight, Math.round(cs.box.h / r.scale))
   };
-  const maxSide = 2200;
+  const maxSide = isLowMemoryOcrDevice() ? 1600 : 2200;
   // OCR 对长公式中的根号、上下标很依赖像素高度，小图至少放大后再识别。
-  const scale = Math.min(maxSide/source.w, maxSide/source.h, 3);
-  const padding = 28;
+  const scale = Math.min(maxSide/source.w, maxSide/source.h, isLowMemoryOcrDevice() ? 2.2 : 3);
+  const padding = isLowMemoryOcrDevice() ? 18 : 28;
   const canvas = document.createElement('canvas');
   const drawWidth = Math.max(1, Math.round(source.w*scale));
   const drawHeight = Math.max(1, Math.round(source.h*scale));
