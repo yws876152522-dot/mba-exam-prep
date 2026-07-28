@@ -31,7 +31,7 @@ const STORAGE_KEYS = {
 
 const defaultSettings = {
   mode: 'mock',           // mock | api
-  ocrProvider: 'mock',    // mock | baidu | tencent
+  ocrProvider: 'paddle',  // paddle | mock | baidu | tencent
   ocrKey: '',
   gptModel: 'gpt-4o',
   gptEndpoint: 'https://api.openai.com/v1/chat/completions',
@@ -46,7 +46,7 @@ const defaultProfiles = [
     desc: '国内直连 · ¥1/百万token · 不用翻墙',
     settings: {
       mode: 'api',
-      ocrProvider: 'mock',
+      ocrProvider: 'paddle',
       ocrKey: '',
       gptModel: 'deepseek-chat',
       gptEndpoint: 'https://api.deepseek.com/v1/chat/completions',
@@ -58,7 +58,7 @@ const defaultProfiles = [
     desc: 'OpenAI · 需翻墙 · 效果更强',
     settings: {
       mode: 'api',
-      ocrProvider: 'mock',
+      ocrProvider: 'paddle',
       ocrKey: '',
       gptModel: 'gpt-4o',
       gptEndpoint: 'https://api.openai.com/v1/chat/completions',
@@ -85,6 +85,8 @@ let state = {
 };
 
 let cropState = null;
+let paddleOcrEngine = null;
+let paddleOcrLoading = null;
 
 function loadState() {
   try { state.mistakes = JSON.parse(localStorage.getItem(STORAGE_KEYS.mistakes) || '[]'); } catch { state.mistakes = []; }
@@ -202,20 +204,25 @@ async function callOCR(images) {
   if (state.settings.mode === 'mock') {
     return mockOCR(images);
   }
-  // OCR 与解题模型解耦：DeepSeek 负责解题，已保存的 GPT 视觉预设负责图片转写。
-  if (state.settings.ocrProvider === 'mock') {
+  // 免费本地 OCR：不上传图片，不需要 Key，适合国内直连。
+  if (state.settings.ocrProvider === 'paddle' || state.settings.ocrProvider === 'mock') {
     try {
-      const result = await callVisionOCR(images);
-      if (result) return result;
+      return await callPaddleOCR(images);
     } catch (e) {
       console.error(e);
-      toast(e.message || '视觉识别失败', 3000);
+      toast('本地 OCR 失败，尝试视觉识别备用方案', 3000);
+      try {
+        const result = await callVisionOCR(images);
+        if (result) return result;
+      } catch (visionError) {
+        console.error(visionError);
+      }
     }
     return {
       text: '',
       confidence: 0,
       needsManual: true,
-      message: '未找到可用的视觉识别配置。DeepSeek Chat 只接收文字，请切换一次 GPT 预设并保存 Key，或手动输入题目。'
+      message: '本地 OCR 加载失败，请检查网络后重试，或手动输入题目。'
     };
   }
   // 真实 Provider 留扩展点
@@ -226,6 +233,80 @@ async function callOCR(images) {
     return await callTencentOCR(images);
   }
   return mockOCR(images);
+}
+
+function loadScriptOnce(src) {
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[src="${src}"]`);
+    if (existing) {
+      if (window.PaddleOCR) resolve();
+      else existing.addEventListener('load', resolve, { once: true });
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = src;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error('PaddleOCR 运行库加载失败'));
+    document.head.appendChild(script);
+  });
+}
+
+async function getPaddleOcrEngine() {
+  if (paddleOcrEngine) return paddleOcrEngine;
+  if (paddleOcrLoading) return paddleOcrLoading;
+  paddleOcrLoading = (async () => {
+    await loadScriptOnce('vendor/paddleocr.bundle.js');
+    if (!window.PaddleOCR) throw new Error('PaddleOCR 初始化失败');
+    const engine = await window.PaddleOCR.create({
+      lang: 'ch',
+      ocrVersion: 'PP-OCRv5',
+      ortOptions: {
+        backend: 'wasm',
+        wasmPaths: new URL('vendor/', window.location.href).href,
+        numThreads: 1,
+        simd: true
+      }
+    });
+    paddleOcrEngine = engine;
+    return engine;
+  })();
+  try {
+    return await paddleOcrLoading;
+  } finally {
+    paddleOcrLoading = null;
+  }
+}
+
+async function callPaddleOCR(images) {
+  const engine = await getPaddleOcrEngine();
+  const inputs = await Promise.all(images.map(async image => {
+    const response = await fetch(image.dataUrl);
+    return await response.blob();
+  }));
+  const results = await engine.predict(inputs, {
+    textDetLimitSideLen: 1280,
+    textDetLimitType: 'max',
+    textRecScoreThresh: 0.35
+  });
+  const allItems = results.flatMap((result, imageIndex) =>
+    (result.items || []).map(item => ({ ...item, imageIndex }))
+  );
+  allItems.sort((a, b) => {
+    if (a.imageIndex !== b.imageIndex) return a.imageIndex - b.imageIndex;
+    const ay = Math.min(...a.poly.map(p => p[1]));
+    const by = Math.min(...b.poly.map(p => p[1]));
+    if (Math.abs(ay - by) > 12) return ay - by;
+    return Math.min(...a.poly.map(p => p[0])) - Math.min(...b.poly.map(p => p[0]));
+  });
+  const scores = allItems.map(item => Number(item.score) || 0);
+  const confidence = scores.length ? scores.reduce((a,b) => a+b, 0) / scores.length : 0;
+  const uncertain = allItems.filter(item => Number(item.score) < .62).map(item => item.text).filter(Boolean);
+  return {
+    text: allItems.map(item => item.text).join('\n'),
+    confidence,
+    uncertain,
+    provider: '飞桨 PaddleOCR（本地）'
+  };
 }
 
 function getVisionProfile() {
@@ -775,7 +856,7 @@ function openOCRSolveConfirm() {
   const imagesEl = $('#ocrSolveImages');
   imagesEl.innerHTML = state.currentSolveImages.map(i => `<img src="${i.dataUrl}" />`).join('');
   $('#ocrSolveText').value = '正在识别...';
-  $('#ocrSolveHint').textContent = '请仔细核对识别结果，必要时手动修改。';
+  $('#ocrSolveHint').textContent = '正在本地识别；首次使用需要加载免费中文模型，之后会自动缓存。';
   openModal('ocrSolveModal');
   callOCR(state.currentSolveImages).then(r => {
     $('#ocrSolveText').value = r.text || '';
@@ -1013,7 +1094,7 @@ function renderMistakePreviews() {
 function openOCRMistakeConfirm() {
   $('#ocrMistakeImages').innerHTML = state.currentMistakeImages.map(i => `<img src="${i.dataUrl}" />`).join('');
   $('#ocrMQuestion').value = '正在识别...';
-  $('#ocrMHint').textContent = '请核对每项内容（题目 / 错答 / 答案 / 思路），必要时手动修改。';
+  $('#ocrMHint').textContent = '正在本地识别；首次使用需要加载免费中文模型，之后会自动缓存。';
   openModal('ocrMistakeModal');
   callOCR(state.currentMistakeImages).then(r => {
     $('#ocrMQuestion').value = r.text || '';
