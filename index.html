@@ -485,43 +485,17 @@
       </div>
       <div class="modal-body">
         <div class="field">
-          <label>模式</label>
-          <select id="setMode">
-            <option value="mock">演示模式（内置题库与模拟识别，无外部调用）</option>
-            <option value="api">API 模式（调用真实 OCR + GPT）</option>
+          <label>模型</label>
+          <select id="setModelProvider">
+            <option value="gpt">GPT-4o（支持图片解题）</option>
+            <option value="deepseek">DeepSeek（纯文字解题）</option>
+            <option value="demo">演示模式（不用 Key）</option>
           </select>
+          <div class="hint">拍照直接解题选 GPT-4o；手动输入题目可选 DeepSeek。</div>
         </div>
         <div class="field">
-          <label>OCR Provider</label>
-          <select id="setOcr">
-            <option value="paddle">飞桨 PaddleOCR（免费 · 本地识别）</option>
-            <option value="mock">Mock（演示）</option>
-            <option value="baidu">百度 OCR</option>
-            <option value="tencent">腾讯云 OCR</option>
-          </select>
-        </div>
-        <div class="field">
-          <label>OCR API Key / Secret</label>
-          <input id="setOcrKey" type="text" placeholder="按所选 Provider 填写" />
-        </div>
-        <div class="field">
-          <label>GPT 模型</label>
-          <input id="setGptModel" type="text" placeholder="gpt-4o / deepseek-chat / 自定义模型名" />
-          <div class="hint">常用：gpt-4o · gpt-4o-mini · deepseek-chat · glm-4-flash</div>
-        </div>
-        <div class="field">
-          <label>GPT API Endpoint</label>
-          <input id="setGptEndpoint" type="text" placeholder="例如 https://api.openai.com/v1/chat/completions" />
-        </div>
-        <div class="field">
-          <label>GPT API Key</label>
-          <input id="setGptKey" type="password" placeholder="sk-..." />
-        </div>
-        <div class="field">
-          <label>⚡ API 预设管理</label>
-          <div class="hint" style="margin-bottom:8px">保存多套配置，翻墙时切 GPT、不翻墙切 DeepSeek，一键搞定</div>
-          <div class="profile-list" id="profileList"></div>
-          <button class="btn ghost sm" id="setSaveProfile" style="margin-top:8px">💾 将当前配置存为预设</button>
+          <label>API Key</label>
+          <input id="setApiKey" type="password" placeholder="粘贴所选模型平台的 Key" />
         </div>
         <div class="field">
           <label>数据管理</label>
@@ -531,7 +505,7 @@
             <button class="btn danger" id="setWipe">清空全部</button>
           </div>
         </div>
-        <div class="hint">提示：演示模式可立即使用；API 模式下数据会发送到你配置的端点，仅本机缓存。</div>
+        <div class="hint">Key 只保存在当前浏览器本地，不会写入网站代码。</div>
       </div>
       <div class="modal-foot">
         <button class="btn ghost" data-close="settingsModal">取消</button>
