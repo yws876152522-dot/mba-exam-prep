@@ -645,9 +645,10 @@ async function callRealGPT(prompt, opts) {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${gptKey}`,
   };
+  const userContent = buildUserMessageContent(prompt, opts.images);
   const messages = [
     { role: 'system', content: opts.system || '你是MBA备考专家，输出请使用JSON。' },
-    { role: 'user', content: prompt },
+    { role: 'user', content: userContent },
   ];
   const baseBody = { model: gptModel, messages, temperature: opts.temperature ?? 0.5 };
   try {
@@ -673,8 +674,20 @@ async function callRealGPT(prompt, opts) {
   } catch (e) {
     console.error(e);
     toast('GPT 请求失败：' + e.message.slice(0, 80), 3000);
+    if (opts.images?.length) throw e;
     return mockGPT(prompt, opts);
   }
+}
+
+function buildUserMessageContent(prompt, images=[]) {
+  if (!images?.length) return prompt;
+  return [
+    { type: 'text', text: prompt },
+    ...images.map(image => ({
+      type: 'image_url',
+      image_url: { url: image.dataUrl }
+    }))
+  ];
 }
 
 // ============== 模拟题库 ==============
@@ -1010,20 +1023,20 @@ function setupSolve() {
   $('#solveBtn').addEventListener('click', async () => {
     const text = $('#solveText').value.trim();
     const subject = $('#solveSubject').value;
-    if (!text) { toast('请先输入或识别题目文本'); return; }
-    if (!state.currentSolveImages.length && !text) { toast('需要题目文本'); return; }
+    const hasImages = state.currentSolveImages.length > 0;
+    if (!hasImages && !text) { toast('请先拍照/上传题目，或输入题目文本'); return; }
     setLoading('#solveBtn', true);
     try {
-      const sys = '你是MBA备考专家，请用 JSON 输出：{ approach: 思路, final: 最优解 }。思路要列出关键步骤和易错点。';
-      const prompt = `科目：${subject}\n题目：\n${text}\n\n请给出：1）思路拆解；2）最优解与最终答案。`;
-      const r = await callGPT(prompt, { system: sys, kind: 'solve' });
+      const sys = '你是MBA备考专家。若用户提供图片，请先直接阅读图片中的完整题目、公式、选项和条件，再解题。请用 JSON 输出：{ approach: 思路, final: 最优解 }。思路要列出关键步骤和易错点。';
+      const prompt = `科目：${subject}\n${text ? `题目补充文本：\n${text}` : '题目在图片中，请先完整识别图片里的题干、公式、选项和条件。'}\n\n请给出：1）思路拆解；2）最优解与最终答案。`;
+      const r = await callGPT(prompt, { system: sys, kind: 'solve', images: state.currentSolveImages });
       const parsed = safeParse(r.raw);
       $('#solveApproach').innerHTML = `<h4>🧠 思路</h4>${escapeHtml(parsed.approach || r.raw)}`;
       $('#solveFinal').innerHTML    = `<h4>✅ 最优解</h4>${escapeHtml(parsed.final || '')}`;
       $('#solveModelBadge').textContent = '模型：' + state.settings.gptModel;
       $('#solveResult').hidden = false;
       $('#solveAddMistakeBtn').disabled = false;
-      $('#solveAddMistakeBtn').onclick = () => addSolveAsMistake(subject, text, parsed);
+      $('#solveAddMistakeBtn').onclick = () => addSolveAsMistake(subject, text || '（图片题目，见原图）', parsed);
       $('#solveCopyBtn').onclick = () => {
         const text = `【思路】\n${parsed.approach || ''}\n\n【最优解】\n${parsed.final || ''}`;
         copy(text); toast('已复制');
@@ -1050,7 +1063,7 @@ async function handleSolveFiles(files, isCamera) {
     added = true;
     renderSolvePreviews();
   }
-  if (added) openOCRSolveConfirm();
+  if (added) toast('已框选题目图片，可直接点击“解答”让模型读图。', 2600);
 }
 
 function renderSolvePreviews() {
